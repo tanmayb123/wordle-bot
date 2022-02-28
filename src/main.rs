@@ -6,10 +6,11 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
 use std::thread;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum CharacterStatus {
     CORRECT,
-    INCORRECT
+    INCORRECT,
+    EXISTS
 }
 
 #[derive(Debug)]
@@ -82,6 +83,7 @@ fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
         if exists[c] > 0 {
             known_exists[c] += 1;
             exists[c] -= 1;
+            char_states[index].status = CharacterStatus::EXISTS;
         } else if known_exists[c] > 0 {
             known_exists[c] = -known_exists[c];
         }
@@ -106,6 +108,9 @@ fn word_is_valid(word: &[char; 5], states: &GuessResult) -> bool {
                 return false;
             }
             continue;
+        }
+        if states.char_states[i].status == CharacterStatus::EXISTS && word[i] == states.char_states[i].character {
+            return false;
         }
         let c = word[i] as usize - 97;
         if states.exists[c] == -6 {
@@ -160,8 +165,89 @@ fn wordle_worker(guess_recv: Receiver<[char; 5]>, words: Vec<[char; 5]>, value_s
     }
 }
 
-fn main() {
-    let words = get_allowed_words().unwrap();
+fn create_guess_result(chars: [(char, CharacterStatus); 5]) -> GuessResult {
+    let mut exists: [i8; 26] = [0; 26];
+    let mut exists_formatted: [i8; 26] = [0; 26];
+    for (c, s) in &chars {
+        let idx = *c as usize - 97;
+        if s != &CharacterStatus::INCORRECT {
+            exists[idx] += 1;
+        }
+    }
+    for (c, s) in &chars {
+        let idx = *c as usize - 97;
+        if exists[idx] == 0 {
+            exists_formatted[idx] = -6;
+        } else {
+            if s == &CharacterStatus::INCORRECT {
+                exists_formatted[idx] = -exists[idx];
+            } else {
+                exists_formatted[idx] = exists[idx];
+            }
+        }
+    }
+    GuessResult{
+        char_states: [
+            CharacterState{
+                character: chars[0].0,
+                status: chars[0].1
+            },
+            CharacterState{
+                character: chars[1].0,
+                status: chars[1].1
+            },
+            CharacterState{
+                character: chars[2].0,
+                status: chars[2].1
+            },
+            CharacterState{
+                character: chars[3].0,
+                status: chars[3].1
+            },
+            CharacterState{
+                character: chars[4].0,
+                status: chars[4].1
+            },
+        ],
+        exists: exists_formatted
+    }
+}
+
+fn clean_first_pass() {
+    let mut words = get_allowed_words().unwrap();
+
+    let mut word_senders = Vec::new();
+    let (value_sender, value_receiver) = channel();
+    for _ in 0..10 {
+        let (guess_sender, guess_receiver) = channel();
+        word_senders.push(guess_sender);
+        let wc = words.clone();
+        let vc = value_sender.clone();
+        thread::spawn(move|| {
+            wordle_worker(guess_receiver, wc, vc);
+        });
+    }
+
+    let mut i = 0;
+    for word in &words {
+        word_senders[i].send(word.clone());
+        i = (i + 1) % word_senders.len();
+    }
+
+    loop {
+        let (word, value) = value_receiver.recv().unwrap();
+        println!("{} -> {}", to_string(word), value);
+        if next.len() == words.len() {
+            break;
+        }
+    }
+}
+
+fn guess_pass() {
+    let mut words = get_allowed_words().unwrap();
+
+    // do guesses
+
     let mut word_senders = Vec::new();
     let (value_sender, value_receiver) = channel();
     for _ in 0..10 {
@@ -178,8 +264,20 @@ fn main() {
         word_senders[i].send(word.clone());
         i = (i + 1) % word_senders.len();
     }
+    let mut next = Vec::new();
     loop {
         let (word, value) = value_receiver.recv().unwrap();
+        next.push((word, value));
+        if next.len() == words.len() {
+            break;
+        }
+    }
+    next.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap());
+    for (word, value) in next {
         println!("{} -> {}", to_string(word), value);
     }
+}
+
+fn main() {
+    clean_first_pass();
 }
