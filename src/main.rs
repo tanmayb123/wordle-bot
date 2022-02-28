@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::iter::zip;
-use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
 use std::thread;
@@ -50,7 +50,7 @@ fn to_string(chars: [char; 5]) -> String {
 }
 
 fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
-    let words = fs::read_to_string("/Users/tanmaybakshi/wordle/allowed_words.txt")?
+    let words = fs::read_to_string("/Users/tanmaybakshi/wordle/possible_words.txt")?
         .split("\n")
         .filter(|x| x.len() == 5)
         .map(|x| to_chars(x))
@@ -149,15 +149,21 @@ fn total_valid_words(words: &Vec<[char; 5]>, states: GuessResult) -> usize {
 }
 
 fn get_expected_value(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
-    let mut total_ending_valid = 0;
+    let mut values = HashMap::new();
     for word in words {
         if guess == word {
             continue;
         }
         let result = get_states(guess, word);
-        total_ending_valid += total_valid_words(&words, result);
+        let value = total_valid_words(&words, result);
+        *values.entry(value).or_insert(0) += 1;
     }
-    return (total_ending_valid as f32) / ((words.len() - 1) as f32);
+    let mut avg_value = 0.0_f32;
+    for (value, occ) in values {
+        let probability = (occ as f32) / (words.len() as f32 - 1.0);
+        avg_value += (value as f32) * probability;
+    }
+    return avg_value;
 }
 
 fn wordle_worker(guess_recv: Receiver<[char; 5]>, words: Vec<[char; 5]>, value_send: Sender<([char; 5], f32)>) -> Result<(), Box<dyn Error>> {
@@ -216,6 +222,22 @@ fn create_guess_result(chars: [(char, CharacterStatus); 5]) -> GuessResult {
     }
 }
 
+fn gr(word: &str, colors: &str) -> GuessResult {
+    let wchars = to_chars(word);
+    let cchars = to_chars(colors);
+    let mut states: [(char, CharacterStatus); 5] = [('a', CharacterStatus::INCORRECT); 5];
+    for i in 0..5 {
+        states[i].0 = wchars[i];
+        states[i].1 = match cchars[i] {
+            'B' => CharacterStatus::INCORRECT,
+            'Y' => CharacterStatus::EXISTS,
+            'G' => CharacterStatus::CORRECT,
+            _ => unreachable!()
+        };
+    }
+    return create_guess_result(states);
+}
+
 fn clean_first_pass() {
     let mut words = get_allowed_words().unwrap();
 
@@ -251,6 +273,10 @@ fn clean_first_pass() {
 fn guess_pass() {
     let mut words = get_allowed_words().unwrap();
 
+    words = get_valid_words(words, gr("raise", "BYBBB"));
+    words = get_valid_words(words, gr("cloak", "BBYGB"));
+    words = get_valid_words(words, gr("nomad", "YGBGG"));
+
     let mut word_senders = Vec::new();
     let (value_sender, value_receiver) = channel();
     for _ in 0..10 {
@@ -282,5 +308,5 @@ fn guess_pass() {
 }
 
 fn main() {
-    clean_first_pass();
+    guess_pass();
 }
