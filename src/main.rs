@@ -103,22 +103,25 @@ fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
 fn word_is_valid(word: &[char; 5], states: &GuessResult) -> bool {
     let mut exists: [i8; 26] = [0; 26];
     for i in 0..5 {
+        let c = word[i] as usize - 97;
         if states.char_states[i].status == CharacterStatus::CORRECT {
             if word[i] != states.char_states[i].character {
                 return false;
             }
+            exists[c] += 1;
             continue;
         }
         if states.char_states[i].status == CharacterStatus::EXISTS && word[i] == states.char_states[i].character {
             return false;
         }
-        let c = word[i] as usize - 97;
         if states.exists[c] == -6 {
             return false;
         }
         exists[c] += 1;
     }
+    let mut i = 0;
     for (ge, re) in zip(exists, states.exists) {
+        i += 1;
         if re == -6 || re == 0 {
             continue;
         }
@@ -234,10 +237,12 @@ fn clean_first_pass() {
         i = (i + 1) % word_senders.len();
     }
 
+    let mut processed = 0;
     loop {
         let (word, value) = value_receiver.recv().unwrap();
         println!("{} -> {}", to_string(word), value);
-        if next.len() == words.len() {
+        processed += 1;
+        if processed == words.len() {
             break;
         }
     }
@@ -245,8 +250,6 @@ fn clean_first_pass() {
 
 fn guess_pass() {
     let mut words = get_allowed_words().unwrap();
-
-    // do guesses
 
     let mut word_senders = Vec::new();
     let (value_sender, value_receiver) = channel();
