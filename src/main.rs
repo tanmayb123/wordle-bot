@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io;
+use std::io::Write;
 use std::iter::zip;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
@@ -50,13 +52,43 @@ fn to_string(chars: [char; 5]) -> String {
     return chars.iter().map(|x| x.to_string()).collect::<Vec<String>>().join("");
 }
 
-fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
+fn get_possible_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
     let words = fs::read_to_string("/Users/tanmaybakshi/wordle/possible_words.txt")?
         .split("\n")
         .filter(|x| x.len() == 5)
         .map(|x| to_chars(x))
         .collect();
     return Ok(words);
+}
+
+fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
+    let words = fs::read_to_string("/Users/tanmaybakshi/wordle/allowed_words.txt")?
+        .split("\n")
+        .filter(|x| x.len() == 5)
+        .map(|x| to_chars(x))
+        .collect();
+    return Ok(words);
+}
+
+fn get_word_frequencies() -> Result<HashMap<[char; 5], i64>, Box<dyn Error>> {
+    let frequencies: Vec<([char; 5], i64)> = fs::read_to_string("/Users/tanmaybakshi/wordle/unigram_freq.csv")?
+        .split("\n")
+        .filter(|x| x.contains(","))
+        .map(|x| {
+            let mut components = x.split(",").map(|x| x.to_string());
+            let word = components.next().unwrap();
+            let _frequency = components.next().unwrap();
+            let frequency: i64 = _frequency.parse().unwrap();
+            return (word, frequency);
+        })
+        .filter(|x| x.0.len() == 5)
+        .map(|x| (to_chars(x.0), x.1))
+        .collect();
+    let mut freq_map = HashMap::new();
+    for (word, freq) in frequencies {
+        freq_map.insert(word, freq);
+    }
+    return Ok(freq_map);
 }
 
 fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
@@ -151,17 +183,19 @@ fn total_valid_words(words: &Vec<[char; 5]>, states: GuessResult) -> usize {
 
 fn get_expected_value(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
     let mut values = HashMap::new();
+    let mut total_words = 0;
     for word in words {
         if guess == word {
             continue;
         }
+        total_words += 1;
         let result = get_states(guess, word);
         let value = total_valid_words(&words, result);
         *values.entry(value).or_insert(0) += 1;
     }
     let mut avg_value = 0.0_f32;
     for (value, occ) in values {
-        let probability = (occ as f32) / (words.len() as f32 - 1.0);
+        let probability = (occ as f32) / (total_words as f32);
         avg_value += (value as f32) * probability;
     }
     return avg_value;
@@ -240,13 +274,16 @@ fn gr<T>(word: T, colors: T) -> GuessResult where T: AsRef<str> {
 }
 
 fn guess_pass() {
-    let mut words = get_allowed_words().unwrap();
+    let mut allowed_words = get_allowed_words().unwrap();
+    let mut possible_words = get_possible_words().unwrap();
+    let word_freqs = get_word_frequencies().unwrap();
 
     let args: Vec<String> = env::args().skip(1).collect();
     let word_count = args.len() / 2;
     for i in 0..word_count {
         let (word, result) = (&args[i * 2], &args[i * 2 + 1]);
-        words = get_valid_words(words, gr(word, result));
+        allowed_words = get_valid_words(allowed_words, gr(word, result));
+        possible_words = get_valid_words(possible_words, gr(word, result));
     }
 
     let mut word_senders = Vec::new();
@@ -254,26 +291,45 @@ fn guess_pass() {
     for _ in 0..10 {
         let (guess_sender, guess_receiver) = channel();
         word_senders.push(guess_sender);
-        let wc = words.clone();
+        let wc = possible_words.clone();
         let vc = value_sender.clone();
         thread::spawn(move|| {
             wordle_worker(guess_receiver, wc, vc);
         });
     }
+
     let mut i = 0;
-    for word in &words {
+    for word in &allowed_words {
         word_senders[i].send(word.clone());
         i = (i + 1) % word_senders.len();
     }
+
     let mut next = Vec::new();
     loop {
         let (word, value) = value_receiver.recv().unwrap();
         next.push((word, value));
-        if next.len() == words.len() {
+        print!("{} / {}\r", next.len(), allowed_words.len());
+        io::stdout().flush();
+        if next.len() == allowed_words.len() {
             break;
         }
     }
-    next.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap());
+
+    next.sort_by(|x, y| {
+        if y.1 != x.1 {
+            return y.1.partial_cmp(&x.1).unwrap();
+        }
+        let y_possible = possible_words.contains(&y.0);
+        let x_possible = possible_words.contains(&x.0);
+        if y_possible != x_possible {
+            let yp = if y_possible { 1 } else { 0 };
+            let xp = if x_possible { 1 } else { 0 };
+            return xp.partial_cmp(&yp).unwrap();
+        }
+        let y_freq = word_freqs.get(&y.0).or(Some(&0)).unwrap();
+        let x_freq = word_freqs.get(&x.0).or(Some(&0)).unwrap();
+        return x_freq.partial_cmp(&y_freq).unwrap();
+    });
     for (word, value) in next {
         println!("{} -> {}", to_string(word), value);
     }
