@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
 use std::fs;
 use std::iter::zip;
@@ -222,7 +223,7 @@ fn create_guess_result(chars: [(char, CharacterStatus); 5]) -> GuessResult {
     }
 }
 
-fn gr(word: &str, colors: &str) -> GuessResult {
+fn gr<T>(word: T, colors: T) -> GuessResult where T: AsRef<str> {
     let wchars = to_chars(word);
     let cchars = to_chars(colors);
     let mut states: [(char, CharacterStatus); 5] = [('a', CharacterStatus::INCORRECT); 5];
@@ -238,44 +239,15 @@ fn gr(word: &str, colors: &str) -> GuessResult {
     return create_guess_result(states);
 }
 
-fn clean_first_pass() {
-    let mut words = get_allowed_words().unwrap();
-
-    let mut word_senders = Vec::new();
-    let (value_sender, value_receiver) = channel();
-    for _ in 0..10 {
-        let (guess_sender, guess_receiver) = channel();
-        word_senders.push(guess_sender);
-        let wc = words.clone();
-        let vc = value_sender.clone();
-        thread::spawn(move|| {
-            wordle_worker(guess_receiver, wc, vc);
-        });
-    }
-
-    let mut i = 0;
-    for word in &words {
-        word_senders[i].send(word.clone());
-        i = (i + 1) % word_senders.len();
-    }
-
-    let mut processed = 0;
-    loop {
-        let (word, value) = value_receiver.recv().unwrap();
-        println!("{} -> {}", to_string(word), value);
-        processed += 1;
-        if processed == words.len() {
-            break;
-        }
-    }
-}
-
 fn guess_pass() {
     let mut words = get_allowed_words().unwrap();
 
-    words = get_valid_words(words, gr("raise", "BYBBB"));
-    words = get_valid_words(words, gr("cloak", "BBYGB"));
-    words = get_valid_words(words, gr("nomad", "YGBGG"));
+    let args: Vec<String> = env::args().skip(1).collect();
+    let word_count = args.len() / 2;
+    for i in 0..word_count {
+        let (word, result) = (&args[i * 2], &args[i * 2 + 1]);
+        words = get_valid_words(words, gr(word, result));
+    }
 
     let mut word_senders = Vec::new();
     let (value_sender, value_receiver) = channel();
@@ -301,7 +273,7 @@ fn guess_pass() {
             break;
         }
     }
-    next.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap());
+    next.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap());
     for (word, value) in next {
         println!("{} -> {}", to_string(word), value);
     }
