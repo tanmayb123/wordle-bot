@@ -19,7 +19,7 @@ struct CharacterState {
 #[derive(Debug)]
 struct GuessResult {
     char_states: [CharacterState; 5],
-    exists: [i8; 128]
+    exists: [i8; 26]
 }
 
 impl CharacterState {
@@ -52,8 +52,8 @@ fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
 }
 
 fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
-    let mut exists: [i8; 128] = [0; 128];
-    let mut known_exists: [i8; 128] = [0; 128];
+    let mut exists: [i8; 26] = [0; 26];
+    let mut known_exists: [i8; 26] = [0; 26];
     let mut char_states: [CharacterState; 5] = [
         CharacterState::new(guess[0]),
         CharacterState::new(guess[1]),
@@ -65,14 +65,14 @@ fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
         if guess_char == real_char {
             char_states[index].status = CharacterStatus::CORRECT;
         } else {
-            exists[*real_char as usize] += 1;
+            exists[*real_char as usize - 97] += 1;
         }
     }
     for index in 0..5 {
         if char_states[index].status == CharacterStatus::CORRECT {
             continue;
         }
-        let c = guess[index] as usize;
+        let c = guess[index] as usize - 97;
         if exists[c] > 0 {
             known_exists[c] += 1;
             exists[c] -= 1;
@@ -81,7 +81,7 @@ fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
         }
     }
     for index in 0..5 {
-        let c = guess[index] as usize;
+        let c = guess[index] as usize - 97;
         if char_states[index].status == CharacterStatus::INCORRECT && known_exists[c] == 0 {
             known_exists[c] = -6;
         }
@@ -93,7 +93,7 @@ fn get_states(guess: &[char; 5], real: &[char; 5]) -> GuessResult {
 }
 
 fn word_is_valid(word: &[char; 5], states: &GuessResult) -> bool {
-    let mut exists: [i8; 128] = [0; 128];
+    let mut exists: [i8; 26] = [0; 26];
     for i in 0..5 {
         if states.char_states[i].status == CharacterStatus::CORRECT {
             if word[i] != states.char_states[i].character {
@@ -101,10 +101,11 @@ fn word_is_valid(word: &[char; 5], states: &GuessResult) -> bool {
             }
             continue;
         }
-        if states.exists[word[i] as usize] == -6 {
+        let c = word[i] as usize - 97;
+        if states.exists[c] == -6 {
             return false;
         }
-        exists[word[i] as usize] += 1;
+        exists[c] += 1;
     }
     for (ge, re) in zip(exists, states.exists) {
         if re == -6 || re == 0 {
