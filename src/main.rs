@@ -2,7 +2,9 @@ use std::error::Error;
 use std::fs;
 use std::iter::zip;
 use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
+use std::thread;
 
 #[derive(Debug, Eq, PartialEq)]
 enum CharacterStatus {
@@ -40,6 +42,10 @@ fn to_chars<T>(x: T) -> [char; 5] where T: AsRef<str> {
         it.next().unwrap(),
         it.next().unwrap(),
     ];
+}
+
+fn to_string(chars: [char; 5]) -> String {
+    return chars.iter().map(|x| x.to_string()).collect::<Vec<String>>().join("");
 }
 
 fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
@@ -134,27 +140,46 @@ fn total_valid_words(words: &Vec<[char; 5]>, states: GuessResult) -> usize {
         .count()
 }
 
-fn get_expected_value(guess: [char; 5], words: &Vec<[char; 5]>) -> f32 {
+fn get_expected_value(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
     let mut total_ending_valid = 0;
     for word in words {
-        if &guess == word {
+        if guess == word {
             continue;
         }
-        let result = get_states(&guess, word);
+        let result = get_states(guess, word);
         total_ending_valid += total_valid_words(&words, result);
     }
     return (total_ending_valid as f32) / ((words.len() - 1) as f32);
 }
 
+fn wordle_worker(guess_recv: Receiver<[char; 5]>, words: Vec<[char; 5]>, value_send: Sender<([char; 5], f32)>) -> Result<(), Box<dyn Error>> {
+    loop {
+        let guess = guess_recv.recv()?;
+        let value = get_expected_value(&guess, &words);
+        value_send.send((guess, value))?;
+    }
+}
+
 fn main() {
     let words = get_allowed_words().unwrap();
-    println!("{}", words.len());
-    let wapple = to_chars("crane");
-    let wcrate = to_chars("crate");
-    let start = Instant::now();
-    let sapple = get_expected_value(wapple, &words);
-    let end = start.elapsed().as_millis();
-    println!("{}", end);
-    let scrate = get_expected_value(wcrate, &words);
-    println!("{} {}", sapple, scrate);
+    let mut word_senders = Vec::new();
+    let (value_sender, value_receiver) = channel();
+    for _ in 0..10 {
+        let (guess_sender, guess_receiver) = channel();
+        word_senders.push(guess_sender);
+        let wc = words.clone();
+        let vc = value_sender.clone();
+        thread::spawn(move|| {
+            wordle_worker(guess_receiver, wc, vc);
+        });
+    }
+    let mut i = 0;
+    for word in &words {
+        word_senders[i].send(word.clone());
+        i = (i + 1) % word_senders.len();
+    }
+    loop {
+        let (word, value) = value_receiver.recv().unwrap();
+        println!("{} -> {}", to_string(word), value);
+    }
 }
