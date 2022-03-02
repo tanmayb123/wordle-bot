@@ -53,7 +53,7 @@ fn to_string(chars: [char; 5]) -> String {
 }
 
 fn get_possible_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
-    let words = fs::read_to_string("/Users/tanmaybakshi/wordle/possible_words.txt")?
+    let words = fs::read_to_string("possible_words.txt")?
         .split("\n")
         .filter(|x| x.len() == 5)
         .map(|x| to_chars(x))
@@ -62,7 +62,7 @@ fn get_possible_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
 }
 
 fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
-    let words = fs::read_to_string("/Users/tanmaybakshi/wordle/allowed_words.txt")?
+    let words = fs::read_to_string("allowed_words.txt")?
         .split("\n")
         .filter(|x| x.len() == 5)
         .map(|x| to_chars(x))
@@ -71,7 +71,7 @@ fn get_allowed_words() -> Result<Vec<[char; 5]>, Box<dyn Error>> {
 }
 
 fn get_word_frequencies() -> Result<HashMap<[char; 5], i64>, Box<dyn Error>> {
-    let frequencies: Vec<([char; 5], i64)> = fs::read_to_string("/Users/tanmaybakshi/wordle/unigram_freq.csv")?
+    let frequencies: Vec<([char; 5], i64)> = fs::read_to_string("unigram_freq.csv")?
         .split("\n")
         .filter(|x| x.contains(","))
         .map(|x| {
@@ -167,17 +167,17 @@ fn word_is_valid(word: &[char; 5], states: &GuessResult) -> bool {
     return true;
 }
 
-fn get_valid_words(words: Vec<[char; 5]>, states: GuessResult) -> Vec<[char; 5]> {
+fn get_valid_words(words: Vec<[char; 5]>, states: &GuessResult) -> Vec<[char; 5]> {
     words
         .into_iter()
-        .filter(|word| word_is_valid(&word, &states))
+        .filter(|word| word_is_valid(&word, states))
         .collect()
 }
 
-fn total_valid_words(words: &Vec<[char; 5]>, states: GuessResult) -> usize {
+fn total_valid_words(words: &Vec<[char; 5]>, states: &GuessResult) -> usize {
     words
         .iter()
-        .filter(|word| word_is_valid(&word, &states))
+        .filter(|word| word_is_valid(&word, states))
         .count()
 }
 
@@ -190,7 +190,7 @@ fn get_expected_value(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
         }
         total_words += 1;
         let result = get_states(guess, word);
-        let value = total_valid_words(&words, result);
+        let value = total_valid_words(&words, &result);
         *values.entry(value).or_insert(0) += 1;
     }
     let mut avg_value = 0.0_f32;
@@ -201,10 +201,32 @@ fn get_expected_value(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
     return avg_value;
 }
 
+fn get_expected_value_2deep(guess: &[char; 5], words: &Vec<[char; 5]>) -> f32 {
+    let mut values = HashMap::new();
+    let mut total_words = 0;
+    for word in words {
+        if guess == word {
+            continue;
+        }
+        total_words += 1;
+        let result = get_states(guess, word);
+        let value = total_valid_words(&words, &result);
+        values.entry(value).or_insert(Vec::new()).push((word, result));
+    }
+    let mut avg_value = 0.0_f32;
+    for (value, results) in values {
+        let occ = results.len() as f32;
+        let next_val = results.iter().map(|(word, result)| get_expected_value(word, &get_valid_words(words.clone(), result))).sum::<f32>() / occ;
+        let probability = occ / (total_words as f32);
+        avg_value += (value as f32 + next_val) * probability;
+    }
+    return avg_value;
+}
+
 fn wordle_worker(guess_recv: Receiver<[char; 5]>, words: Vec<[char; 5]>, value_send: Sender<([char; 5], f32)>) -> Result<(), Box<dyn Error>> {
     loop {
         let guess = guess_recv.recv()?;
-        let value = get_expected_value(&guess, &words);
+        let value = get_expected_value_2deep(&guess, &words);
         value_send.send((guess, value))?;
     }
 }
@@ -282,8 +304,8 @@ fn guess_pass() {
     let word_count = args.len() / 2;
     for i in 0..word_count {
         let (word, result) = (&args[i * 2], &args[i * 2 + 1]);
-        allowed_words = get_valid_words(allowed_words, gr(word, result));
-        possible_words = get_valid_words(possible_words, gr(word, result));
+        allowed_words = get_valid_words(allowed_words, &gr(word, result));
+        possible_words = get_valid_words(possible_words, &gr(word, result));
     }
 
     let mut word_senders = Vec::new();
